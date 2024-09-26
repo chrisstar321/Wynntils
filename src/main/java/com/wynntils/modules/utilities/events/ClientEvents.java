@@ -15,10 +15,13 @@ import com.wynntils.core.framework.interfaces.Listener;
 import com.wynntils.core.utils.ItemUtils;
 import com.wynntils.core.utils.StringUtils;
 import com.wynntils.core.utils.Utils;
+import com.wynntils.core.utils.objects.Location;
+import com.wynntils.core.utils.objects.Pair;
 import com.wynntils.core.utils.reference.EmeraldSymbols;
 import com.wynntils.core.utils.reference.RequirementSymbols;
 import com.wynntils.modules.chat.overlays.ChatOverlay;
 import com.wynntils.modules.chat.overlays.gui.ChatGUI;
+import com.wynntils.modules.core.managers.CompassManager;
 import com.wynntils.modules.core.overlays.inventories.ChestReplacer;
 import com.wynntils.modules.core.overlays.inventories.HorseReplacer;
 import com.wynntils.modules.core.overlays.inventories.InventoryReplacer;
@@ -80,6 +83,8 @@ import java.time.format.FormatStyle;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import static net.minecraft.util.text.TextFormatting.getTextWithoutFormattingCodes;
 
 public class ClientEvents implements Listener {
 
@@ -160,7 +165,11 @@ public class ClientEvents implements Listener {
         afkProtectionEnabled = false;
         afkProtectionActivated = false;
 
-        lastHealth = McIf.player().getHealth();
+        EntityPlayerSP player = McIf.player();
+        if (player != null) {
+            lastHealth = player.getHealth();
+        }
+        
         lastUserInput = System.currentTimeMillis();
     }
 
@@ -274,7 +283,7 @@ public class ClientEvents implements Listener {
     public void onGUIOpen(GuiOpenEvent e) {
         // Store the original opened chest so we can check itemstacks later
         // Make sure this check is not spoofed by checking inventory size
-        if (e.getGui() instanceof ChestReplacer && TextFormatting.getTextWithoutFormattingCodes(((ChestReplacer) e.getGui()).getLowerInv().getName()).startsWith("Loot Chest")
+        if (e.getGui() instanceof ChestReplacer && getTextWithoutFormattingCodes(((ChestReplacer) e.getGui()).getLowerInv().getName()).startsWith("Loot Chest")
                 && ((ChestReplacer) e.getGui()).getLowerInv().getSizeInventory() == 27) {
             currentLootChest = ((ChestReplacer) e.getGui()).getLowerInv();
         }
@@ -580,7 +589,7 @@ public class ClientEvents implements Listener {
         if (UtilitiesConfig.INSTANCE.preventMythicChestClose || UtilitiesConfig.INSTANCE.preventFavoritedChestClose) {
             if (e.getKeyCode() == 1 || e.getKeyCode() == McIf.mc().gameSettings.keyBindInventory.getKeyCode()) {
                 IInventory inv = e.getGui().getLowerInv();
-                String invName = TextFormatting.getTextWithoutFormattingCodes(inv.getName());
+                String invName = getTextWithoutFormattingCodes(inv.getName());
                 if ((invName.startsWith("Loot Chest") || invName.contains("Daily Rewards") ||
                         invName.contains("Objective Rewards")) && inv.getSizeInventory() <= 27) {
                     for (int i = 0; i < inv.getSizeInventory(); i++) {
@@ -656,9 +665,25 @@ public class ClientEvents implements Listener {
         }
     }
 
+    private void handleDungeonKeyMClick(ItemStack is) {
+        if (DungeonKeyManager.isDungeonKey(is)) {
+            Pair<Integer, Integer> coords = DungeonKeyManager.getDungeonCoords(is);
+            CompassManager.setCompassLocation(new Location(coords.a, 0, coords.b));
+            boolean isCorrupted = DungeonKeyManager.isCorrupted(is);
+            String location = (isCorrupted) ? "§4The Forgery" : "§6" + DungeonKeyManager.getDungeonKey(is).getFullName(false);
+            GameUpdateOverlay.queueMessage("§aSet compass to " + location);
+        }
+    }
+
     @SubscribeEvent
     public void clickOnInventory(GuiOverlapEvent.InventoryOverlap.HandleMouseClick e) {
         if (!Reference.onWorld) return;
+
+        // Dungeon key middle click functionality
+        if (e.getMouseButton() == 2 && e.getGui().getSlotUnderMouse() != null && e.getGui().getSlotUnderMouse().getHasStack()) {
+            ItemStack is = e.getGui().getSlotUnderMouse().getStack();
+            handleDungeonKeyMClick(is);
+        }
 
         if (UtilitiesConfig.INSTANCE.preventSlotClicking && e.getGui().getSlotUnderMouse() != null && e.getGui().getSlotUnderMouse().inventory instanceof InventoryPlayer) {
             if ((!EmeraldPouchManager.isEmeraldPouch(e.getGui().getSlotUnderMouse().getStack()) || e.getMouseButton() == 0) && checkDropState(e.getGui().getSlotUnderMouse().getSlotIndex())) {
@@ -672,8 +697,16 @@ public class ClientEvents implements Listener {
     public void clickOnChest(GuiOverlapEvent.ChestOverlap.HandleMouseClick e) {
         if (e.getSlotIn() == null) return;
 
+        // Dungeon key middle click functionality
+        if (e.getMouseButton() == 2 && e.getGui().getSlotUnderMouse() != null && e.getGui().getSlotUnderMouse().getHasStack()) {
+            ItemStack is = e.getGui().getSlotUnderMouse().getStack();
+            handleDungeonKeyMClick(is);
+        }
+
+        IInventory chestInv = e.getGui().getLowerInv();
+
         // Queue messages into game update ticker when clicking on emeralds in loot chest
-        if (TextFormatting.getTextWithoutFormattingCodes(e.getGui().getLowerInv().getName()).startsWith("Loot Chest") && OverlayConfig.GameUpdate.RedirectSystemMessages.INSTANCE.redirectEmeraldPouch) {
+        if (getTextWithoutFormattingCodes(chestInv.getName()).startsWith("Loot Chest") && OverlayConfig.GameUpdate.RedirectSystemMessages.INSTANCE.redirectEmeraldPouch) {
             // Check if item is actually an emerald, if we're left clicking, and make sure we're not shift clicking
             if (currentLootChest.getStackInSlot(e.getSlotId()).getDisplayName().equals("§aEmerald") && e.getMouseButton() == 0 && !GuiScreen.isShiftKeyDown()) {
                 // Find all emerald pouches in inventory
@@ -703,9 +736,9 @@ public class ClientEvents implements Listener {
 
 
         // Prevent accidental ingredient/emerald pouch clicks in loot chests
-        if (TextFormatting.getTextWithoutFormattingCodes(e.getGui().getLowerInv().getName()).startsWith("Loot Chest") && UtilitiesConfig.INSTANCE.preventOpeningPouchesChest) {
+        if (getTextWithoutFormattingCodes(chestInv.getName()).startsWith("Loot Chest") && UtilitiesConfig.INSTANCE.preventOpeningPouchesChest) {
             // Ingredient pouch
-            if (e.getSlotId() - e.getGui().getLowerInv().getSizeInventory() == 4) {
+            if (e.getSlotId() - chestInv.getSizeInventory() == 4) {
                 e.setCanceled(true);
                 return;
             }
@@ -722,7 +755,7 @@ public class ClientEvents implements Listener {
 
         // Bulk buy functionality
         // The title for the shops are in slot 4
-        if (UtilitiesConfig.INSTANCE.shiftBulkBuy && isBulkShopConsumable(e.getGui().getLowerInv().getStackInSlot(e.getSlotId())) && GuiScreen.isShiftKeyDown()) {
+        if (UtilitiesConfig.INSTANCE.shiftBulkBuy && isBulkShopConsumable(chestInv, chestInv.getStackInSlot(e.getSlotId())) && GuiScreen.isShiftKeyDown()) {
             CPacketClickWindow packet = new CPacketClickWindow(e.getGui().inventorySlots.windowId, e.getSlotId(), e.getMouseButton(), e.getType(), e.getSlotIn().getStack(), e.getGui().inventorySlots.getNextTransactionID(McIf.player().inventory));
             for (int i = 1; i < UtilitiesConfig.INSTANCE.bulkBuyAmount; i++) { // int i is 1 by default because the user's original click is not cancelled
                 McIf.mc().getConnection().sendPacket(packet);
@@ -778,14 +811,14 @@ public class ClientEvents implements Listener {
         if (oldStack.isEmpty() || !newStack.isEmpty() && !oldStack.isItemEqual(newStack)) return; // invalid move
         if (!oldStack.hasDisplayName()) return; // old item is not a valid item
 
-        String oldName = TextFormatting.getTextWithoutFormattingCodes(oldStack.getDisplayName());
+        String oldName = getTextWithoutFormattingCodes(oldStack.getDisplayName());
         Matcher oldMatcher = CRAFTED_USES.matcher(oldName);
         if (!oldMatcher.matches()) return;
         int oldUses = Integer.parseInt(oldMatcher.group(1));
 
         int newUses = 0;
         if (!newStack.isEmpty()) {
-            String newName = TextFormatting.getTextWithoutFormattingCodes(StringUtils.normalizeBadString(newStack.getDisplayName()));
+            String newName = getTextWithoutFormattingCodes(StringUtils.normalizeBadString(newStack.getDisplayName()));
             Matcher newMatcher = CRAFTED_USES.matcher(newName);
             if (newMatcher.matches()) {
                 newUses = Integer.parseInt(newMatcher.group(1));
@@ -899,10 +932,9 @@ public class ClientEvents implements Listener {
         EntityPlayer ep = (EntityPlayer) clicked;
         if (ep.getTeam() == null) return; // player model npc
 
-        ItemType item = ItemUtils.getItemType(player.getHeldItemMainhand());
-        if (item == null) return; // not any type of gear
-        if (item != ItemType.WAND && item != ItemType.DAGGER && item != ItemType.BOW && item != ItemType.SPEAR && item != ItemType.RELIK)
+        if (!ItemUtils.isWeapon(player.getHeldItemMainhand()))
             return; // not a weapon
+
         e.setCanceled(true);
     }
 
@@ -965,24 +997,9 @@ public class ClientEvents implements Listener {
         }
     }
 
-    private static boolean isBulkShopConsumable(ItemStack is) {
-        String itemName = is.getDisplayName();
-        return (itemName.endsWith(" Teleport Scroll") ||
-                itemName.contains("Potion of ") || // We're using .contains here because we check for skill point potions which are different colors/symbols
-                itemName.endsWith("Speed Surge [1/1]") ||
-                itemName.endsWith("Bipedal Spring [1/1]") ||
-                itemName.contains("Egg") ||
-
-                itemName.contains("Silver Festival Coin") ||
-                itemName.contains("Golden Festival Coin") ||
-                itemName.contains("Trophy Festival Coin") ||
-                itemName.contains("Heroic Fireworks [1/1]") ||
-                itemName.contains("Scavenger Seeker [1/1]") ||
-                itemName.contains("Reward Voucher [1/1]") ||
-                itemName.contains("Balloon [1/1]") || // This covers all the balloon colours
-
-                itemName.equals("§aEmerald")) // For the Selchar Treasure Merchant
-
+    private static boolean isBulkShopConsumable(IInventory inv, ItemStack is) {
+        return inv.getStackInSlot(4).getDisplayName().contains("§a")
+                && inv.getStackInSlot(4).getDisplayName().contains("Shop")
                 && ItemUtils.getStringLore(is).contains("§6Price:")
                 && !ItemUtils.getStringLore(is).contains(" x "); // Make sure we're not in trade market
         // Normal shops don't have a string with " x " whereas TM uses it for the amount of the item being sold
@@ -991,7 +1008,9 @@ public class ClientEvents implements Listener {
     @SubscribeEvent
     public void onItemHovered(ItemTooltipEvent e) {
         // If the shift to bulk buy setting is on and is applicable to the hovered item, add bulk prices
-        if (!UtilitiesConfig.INSTANCE.shiftBulkBuy || !isBulkShopConsumable(e.getItemStack())) return;
+        if (!UtilitiesConfig.INSTANCE.shiftBulkBuy
+                || !(McIf.mc().currentScreen instanceof ChestReplacer)
+                || !isBulkShopConsumable(((ChestReplacer) McIf.mc().currentScreen).getLowerInv(), e.getItemStack())) return;
 
         ItemStack is = e.getItemStack();
         List<String> newLore = new ArrayList<>();
@@ -1049,7 +1068,7 @@ public class ClientEvents implements Listener {
 
     @SubscribeEvent
     public void onWindowOpen(PacketEvent<SPacketOpenWindow> e){
-        if (TextFormatting.getTextWithoutFormattingCodes(e.getPacket().getWindowTitle().getUnformattedText()).startsWith("Loot Chest"))
+        if (getTextWithoutFormattingCodes(e.getPacket().getWindowTitle().getUnformattedText()).startsWith("Loot Chest"))
             lastOpenedChestWindowId = e.getPacket().getWindowId();
         if (e.getPacket().getWindowTitle().toString().contains("Daily Rewards") || e.getPacket().getWindowTitle().toString().contains("Objective Rewards"))
             lastOpenedRewardWindowId = e.getPacket().getWindowId();
